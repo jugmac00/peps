@@ -1,0 +1,353 @@
+PEP: 9999
+Title: Editable installs
+Author: Bernát Gábor <gaborjbernat@gmail.com>
+Sponsor: Paul Ganssle <paul@ganssle.io>
+Discussions-To: https://discuss.python.org/t/draft-pep-editable-installs-for-pep-517-style-build-backends/8510
+Status: Draft
+Type: Standards Track
+Content-Type: text/x-rst
+Created: 28-May-2021
+Post-History: 
+
+
+Abstract
+========
+
+This document describes extensions to the build backend-frontend communication
+(as introduced by `PEP-517`_) to allow projects to be installed in editable
+mode.
+
+Motivation
+==========
+
+Python programmers want to be able to develop packages without having to
+install them after every change. Installing a project is made up of
+building a wheel from the source directory (as described by `PEP-517`_
+and `PEP-518`_) and then install that wheel into a python environment.
+
+Currently users can achieve this by:
+
+- Adding the relevant source directories to ``sys.path`` (configurable from the
+  command line interface via the ``PYTHONPATH`` environment variable). Note in
+  this case the user have to install the project dependencies themselves and
+  entry points or project metadata are not generated.
+- `setuptools`_ provides the `setup.py develop`_ mechanism: installs a
+  ``pth`` file that injects the project root onto the ``sys.path``
+  at interpreter startup time, generates the project metadata and also installs
+  project dependencies. `pip`_ exposes calling this mechanism via the
+  `pip install -e <project_directory>`_ command line interface.
+- `flit`_ provides the `flit install --symlink`_ command that: symlinks the
+  project files into the interpreters ``purelib`` folder, generates the project
+  metadata and also installs dependencies.
+
+The installation of a project in a way that the code being imported and
+executed remains in the source directory is known as the *editable*
+installation mode. This mode allows the user to change the code and run it
+without needing to reinstall it after every change.
+
+The goal of this PEP is to provide a standardized interface between the build
+frontend and backends for building and installing projects in editable mode.
+This will allow backends to expose the project in editable mode, and for the
+frontends a way to request this, in a generic mode for all build backend and
+frontends. The PEP also proposes on not imposing any editable mode onto the
+packaging tool the user communicates with (and in turn which uses the build
+frontend to communicate with the build backend).
+
+Rationale
+=========
+
+`PEP-517`_ deferred "Editable installs" because this would have delayed further
+its adoption and there wasn't an agreement how editable installs should be
+achieved. Due to the propularity of the `setuptools`_ and `pip`_ projects
+the status quo prevailed, and backends could achieve editable mode by providing
+a ``setup.py develop`` implementation, which the user could trigger via
+`pip install -e <project_directory>`_. By definining an editable interface
+between build backend and frontends we can totally eliminate the need of the
+``setup.py`` file and communication method.
+
+Terminology and goals
+=====================
+
+The editable installation mode implies that the source code of the project
+being installed is available in a local directory.
+
+Once the project is installed in editable mode, users expect that changes to
+the project code in the local source tree become effective without the need of
+a new installation step.
+
+Some kind of changes, such as the addition or modification of entry points, or
+the addition of new dependencies, require a new installation step to become
+effective. These changes are typically made in build backend configuration
+files (such as ``pyproject.toml``), so it is consistent with the general user
+expectation that source code is imported from the source tree.
+
+When a project is installed in editable mode, users expect the installation to
+behave identically as a regular installation. Depending on the way build build
+frontends implement this specification, some minor differences may be visible,
+such as the presence of additional files (compared to a regular installation)
+either in the source tree or the interpreters installation path. Both the build
+backend and frontends are encouraged to document such potential differences.
+
+For reference a non editable installation works as follows:
+
+1. The **developer** is using a tool, we'll call it here the **orchestrator**
+   to drive the project development (e.g., `pip`_). When the user wants to
+   trigger a package build and install of a project they'll communicate with
+   the **orchestrator**.
+2. The orchestrator uses a **build frontend** to trigger build of a wheel
+   (e.g., `build`_). The build frontend uses `PEP-517`_ to communicate with the
+   **build backend** (e.g. `setuptools`_) - with the build backend installed
+   into an isolated environment. Once invoked the backend returns a wheel.
+3. The orchestrator takes the wheel and feeds it to an **installer** (e.g.,
+   `installer`_) to install the wheel into the target python interpreter.
+
+The Mechanism
+=============
+
+This PEP adds two optional hooks to the `PEP-517`_ backend interface. One of
+the hooks is used to specify the build dependencies of an editable install, and
+the other hook returns the necessary information via the build frontend the
+orchestrator needs to create an editable install.
+
+get_requires_for_build_editable
+-------------------------------
+
+:: 
+
+  def build_editable(config_settings=None):
+      ...
+
+This hook MUST return an additional list of strings containing `PEP-508`_
+dependency specifications, above and beyond those specified in the
+``pyproject.toml`` file. These dependencies will be installed when calling the
+``build_editable`` hook.
+
+If not defined, the default implementation is equivalent to return ``[]``.
+
+build_editable
+--------------
+
+:: 
+
+  def build_editable(config_settings=None):
+      ...
+
+The function returns an object of type ``EditableInfo`` as defined below:
+
+::
+
+  from types import ModuleType
+  from typing import Protocol, TypedDict
+
+
+  class RequiredEditableInfo(TypedDict, total=True):
+      metadata_for_build_editable: str
+      """distribution information of the package as defined by PEP-491"""
+
+  class EditableInfo(RequiredEditableInfo, total=False):
+      sys_paths: list[str]
+      """folders that should be inserted at the start of the sys.path"""
+
+      purelib_paths: list[str]
+      """files or folders that should be available under the purelib"""
+
+      platlib_paths: list[str]
+      """files or folders that should be available under the platlib"""
+
+      import_callback: ImportCallback | None
+      """a function to execute whenever a module is to be imported"""
+
+  class ImportCallback(TypedDict, total=True):
+      module: str
+      """the module containing the callback"""
+      
+      func: str
+      """the function to serve as a callback, of type CallbackFunc"""
+
+  class CallbackFunc(Protocol):
+      def __call__(self, name) -> ModuleType | None:
+          """
+          :param name: the module name to import
+          :returns: the module if it can import, otherwise None
+          """
+
+
+Build frontend requirements
+---------------------------
+
+The build frontend is responsible of setting up the environment for the build
+backend to generate the build editable information. It's also responsible of
+communicating with the backend and receiving the ``EditableInfo`` object. All
+recommendations from `PEP-517`_ for the build wheel hook applies here too.
+
+Orchestrator requirements
+-------------------------
+
+It's the responsibility of the orchestrator to achieve the editable
+functionality. The orchestrator should provide (one or more) mechanisms
+depending on the amount of data the backend provides and communicate directly
+with the user about which to select.
+
+The orchestrator is repsonsible of making sure the ``.dist-info`` folder is
+available at runtime within the target interpreter for the
+``importlib.metadata`` and ``importlib.resources`` modules.
+
+The orchestrator must ensure that all install requirements (and should the user
+require any extra groups) are installed part of the editable build into the
+target interpreter.
+
+The orchestrator must ensure that console or gui entrypoints are generated
+during the editable installation, just as they would be should the
+``.dist-info`` come as part of a wheel.
+
+Build backends that provide an import hoook functionality are required to
+provision the code to their import hooks either via the ``platlib_paths``, 
+``purelib_paths`` or install requirements injected just for the editable
+build installs.
+
+The orchestrator is responsible of generating the RECORD file, based on the
+object the build backend returns and their choosen editable implementation. Due
+to this uninstallation of editables should not require any special treatment.
+
+The orchestrator must create a ``direct_url.json`` file in the ``.dist-info``
+directory of the installed distribution, in compliance with PEP 610. The
+``url`` value must be a ``file://`` url pointing to the project directory
+(i.e. the directory containing ``pyproject.toml``), and the ``dir_info`` value
+must be ``{'editable': true}``.
+
+The orchestrator must not rely on the ``prepare_metadata_for_build_wheel`` hook
+when installing in editable mode. They must use ``build_editable`` and use the
+``.dist-info`` folder returned by that.
+
+If the import hook is provided by the backend the orchestrator should register
+a hook into the import system at interpreter startup and make sure the hook is called
+before any other import mechanisms are attempted.
+
+The import hook will be called during the import discovery mechanism of the
+target interpreter and there are no guarantees related to the current working
+guarantee or environment variables. The build backend should generate an import
+hook that does not really on the value of these states.
+
+Should the orchestrator be unable to create an editable installation with the
+set of information returned by the build backend it's free to raise an error
+to the user.
+
+Example editable mode implementations
+-------------------------------------
+
+Achieving an editable mode can be done in multiple ways by the orchestrator.
+We'll present a few examples of these here, note however the orchestrators
+are encouraged to come up with new ways if needed.
+
+Alter ``sys.path`` at interpreter startup
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+This is what `setuptools`_ does with the generation of the ``pth`` file into
+the interpreters ``purelib``. This solution is very fast and cross platform
+compatible, however puts the entire source tree onto the system, potentially
+exposing modules that would not be available in a normal installation case.
+
+This mode is what `pip install -e <project_directory>`_ currently resolves to.
+It requires the build backend to provide a folder to expose, and the
+orchestrator to insert that path onto the ``sys.path`` at interpreter startup.
+
+With this PEP the build backend would return:
+
+::
+
+    {
+      "metadata_for_build_editable": "<dir to dist-info>",
+      "sys_paths": ["<project dir>"]
+    }
+
+The orchestrator then could generate a ``pth`` file to insert ``<project dir>``
+onto the ``sys.path`` at startup, and similarly with the parent of the
+distribution information.
+
+Symlink the source code
+~~~~~~~~~~~~~~~~~~~~~~~
+
+This is what flit does via its `flit install --symlink`_. This solution
+requires the current platform to support symlinks, but allows potentially to
+symlink not folders, but also andividual files, which could solve the problem
+of exposing files that otherwise would not be exposed.
+
+This mode requires the build backend to provides one or more folder(s)/file(s)
+to expose, and the orchestrator to to symlink them.
+
+With this PEP the build backend would return:
+
+::
+
+  {
+    "metadata_for_build_editable": "<dir to dist-info>",
+    "purelib_paths": ["<module_file>", "<package_folder>"]
+  }
+
+The orchestrator then could generate symlinks into the ``purelib`` folder of
+the target interpreter for the ``.dist-info`` folder and all file/folders
+within the ``purelib_paths``. Note should the orchestrator wish they could
+use ``pth`` files with this set of information too.
+
+Import hook
+~~~~~~~~~~~
+
+Import hooks allow stronger collaboration between the build backend and the
+target interpreter. We'll go over a few such use cases here.
+
+Expose a source folder, but honour module excludes: the backend may generate
+an import hook that consults the exclusion table before allowing a source
+file loader to discover a file in the source directory or not.
+
+For a project let there be two modules ``A.py`` and ``B.py``, these are two
+separate files in the source direcotry, however during building a wheel they
+are merged into one megafile ``project.py``. In this case with this PEP 
+the backend could generate an import hook that reads the source files at
+import time and merges them in-memory before materializing it as a module.
+
+Automatically update out of date C-extensions: the backend may generate an
+import hook that checks the last modified timestamp for a C-extension source
+file, and if it is greater than the current C-extension binary trigger an
+update by calling the compiler before import.
+
+Rejected ideas
+==============
+
+This PEP competes with ``PEP-660``, and rejects that proposal because we think
+the mechanism of achieving an editable installation should be within the build
+frontend rather than the build backend. Furthermore, this approach allows for
+the ecosystem to use alternative mechanisms to achieve the editable install
+effect (e.g., insert path on ``sys.path`` or symlinks instead of implying just
+the loose wheel mode from the backends described by that PEP).
+
+References
+==========
+
+.. _`PEP-517`: https://www.python.org/dev/peps/pep-0517/
+.. _`PEP-508`: https://www.python.org/dev/peps/pep-0508/
+.. _`PEP-518`: https://www.python.org/dev/peps/pep-0518/
+.. _`setuptools`: https://setuptools.readthedocs.io/en/latest/
+.. _`setup.py develop`: https://setuptools.readthedocs.io/en/latest/userguide/commands.html#develop-deploy-the-project-source-in-development-mode
+.. _`pip`: https://pip.pypa.io
+.. _`installer`: https://pypi.org/project/installer
+.. _`build`: https://pypa-build.readthedocs.io
+.. _`pip install -e <project_directory>`: https://pip.pypa.io/en/stable/cli/pip_install/#install-editable
+.. _`flit`: https://flit.readthedocs.io/en/latest/index.html
+.. _`flit install --symlink`: https://flit.readthedocs.io/en/latest/cmdline.html#cmdoption-flit-install-s
+.. _`editables`: https://pypi.org/project/editables/
+
+
+Copyright
+=========
+
+This document is placed in the public domain or under the
+CC0-1.0-Universal license, whichever is more permissive.
+
+..
+   Local Variables:
+   mode: indented-text
+   indent-tabs-mode: nil
+   sentence-end-double-space: t
+   fill-column: 70
+   coding: utf-8
+   End:
