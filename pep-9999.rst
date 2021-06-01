@@ -58,10 +58,10 @@ Rationale
 
 `PEP-517`_ deferred "Editable installs" because this would have delayed further
 its adoption and there wasn't an agreement how editable installs should be
-achieved. Due to the propularity of the `setuptools`_ and `pip`_ projects
+achieved. Due to the popularity of the `setuptools`_ and `pip`_ projects
 the status quo prevailed, and backends could achieve editable mode by providing
 a ``setup.py develop`` implementation, which the user could trigger via
-`pip install -e <project_directory>`_. By definining an editable interface
+`pip install -e <project_directory>`_. By defining an editable interface
 between build backend and frontends we can totally eliminate the need of the
 ``setup.py`` file and communication method.
 
@@ -188,7 +188,7 @@ functionality. The orchestrator should provide (one or more) mechanisms
 depending on the amount of data the backend provides and communicate directly
 with the user about which to select.
 
-The orchestrator is repsonsible of making sure the ``.dist-info`` folder is
+The orchestrator is responsible of making sure the ``.dist-info`` folder is
 available at runtime within the target interpreter for the
 ``importlib.metadata`` and ``importlib.resources`` modules.
 
@@ -200,13 +200,13 @@ The orchestrator must ensure that console or gui entrypoints are generated
 during the editable installation, just as they would be should the
 ``.dist-info`` come as part of a wheel.
 
-Build backends that provide an import hoook functionality are required to
+Build backends that provide an import hook functionality are required to
 provision the code to their import hooks either via the ``platlib_paths``, 
 ``purelib_paths`` or install requirements injected just for the editable
 build installs.
 
 The orchestrator is responsible of generating the RECORD file, based on the
-object the build backend returns and their choosen editable implementation. Due
+object the build backend returns and their chosen editable implementation. Due
 to this uninstallation of editables should not require any special treatment.
 
 The orchestrator must create a ``direct_url.json`` file in the ``.dist-info``
@@ -269,7 +269,7 @@ Symlink the source code
 
 This is what flit does via its `flit install --symlink`_. This solution
 requires the current platform to support symlinks, but allows potentially to
-symlink not folders, but also andividual files, which could solve the problem
+symlink not folders, but also individual files, which could solve the problem
 of exposing files that otherwise would not be exposed.
 
 This mode requires the build backend to provides one or more folder(s)/file(s)
@@ -300,7 +300,7 @@ an import hook that consults the exclusion table before allowing a source
 file loader to discover a file in the source directory or not.
 
 For a project let there be two modules ``A.py`` and ``B.py``, these are two
-separate files in the source direcotry, however during building a wheel they
+separate files in the source directory, however during building a wheel they
 are merged into one megafile ``project.py``. In this case with this PEP 
 the backend could generate an import hook that reads the source files at
 import time and merges them in-memory before materializing it as a module.
